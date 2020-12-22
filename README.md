@@ -1,10 +1,9 @@
-# Multi-task Collaborative Network for Joint Referring Expression Comprehension and Segmentation
+# Global Inference Network- pytorch- Keras
 
 [![LICENSE](https://img.shields.io/badge/license-MIT-green)](https://github.com/luogen1996/MCN/blob/master/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.6-blue.svg)](https://www.python.org/)
 ![PyTorch](https://img.shields.io/badge/keras-%237732a8)
 
-# Global Inference Network- pytorch
 This is the keras  implementation of the paper: A Real-time Global Inference Network for One-stage
 Referring Expression Comprehension.  This repo provides codes for reproducing the results on refcoco-series datasets.
 
