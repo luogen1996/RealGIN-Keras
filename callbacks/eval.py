@@ -88,7 +88,7 @@ class Evaluate(keras.callbacks.Callback):
             print('det_acc: {:.4f}'.format(self.det_acc))
 
     def evaluate(self, tag='image', is_save_images=False):
-        self.boxes, self.scores, self.eval_inputs = yolo_eval_v2(self.model.output_shape,self.anchors, self.input_image_shape,
+        self.boxes, self.scores, self.eval_inputs = yolo_eval_v2(self.model.output_shape[0],self.anchors, self.input_image_shape,
                                                                                score_threshold=0., iou_threshold=0.)
         # Add the class predict temp dict
         # pred_tmp = []
@@ -131,7 +131,7 @@ class Evaluate(keras.callbacks.Callback):
 
             images = np.array(images)
             word_vecs = np.array(word_vecs)
-            out_bboxes_1 = self.model.predict_on_batch([images, word_vecs])
+            out_bboxes_1,_ = self.model.predict_on_batch([images, word_vecs])
             for i, out in enumerate(out_bboxes_1):
                 # Predict
                 out_boxes, out_scores = self.sess.run(  # out_boxes is [1,4]  out_scores is [1,1]

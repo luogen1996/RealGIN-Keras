@@ -72,7 +72,7 @@ def make_multi_modal_regression(featrue_feats,f_q,out_filters,config):
     y = simple_fusion(F_v,f_q)
     #regression
     y=  DarknetConv2D(out_filters, (1,1))(y)
-    return y
+    return y,E
 
 def yolo_body(inputs,q_input, num_anchors,config):
     """
@@ -95,9 +95,9 @@ def yolo_body(inputs,q_input, num_anchors,config):
     else:
         fq=build_nlp_model(q_input,config['rnn_hidden_size'],config['bidirectional'],config['rnn_drop_out'],config['lang_att'])  #build nlp model for fusion
 
-    y = make_multi_modal_regression(Fv,fq, num_anchors*5,config)
+    y,E = make_multi_modal_regression(Fv,fq, num_anchors*5,config)
 
-    return Model([inputs,q_input], [y])
+    return Model([inputs,q_input], [y,E])
 
 def yolo_head(feats, anchors, input_shape, calc_loss=False,att_map=None):
     """Convert final layer features to bounding box parameters."""
@@ -276,13 +276,12 @@ def preprocess_true_boxes(true_boxes, input_shape, anchors): #10.1 delete classf
     y_true = [np.zeros((m,grid_shapes[l][0],grid_shapes[l][1],len(anchor_mask[l]),5),
         dtype='float32') for l in range(num_layers)]       # shape is [[32,52,52,3,5],[32,26,26,3,5],[32,13,13,3,5]]
 
-    gaussian_gt_true=[np.zeros((m,grid_shapes[l][0],grid_shapes[l][1],1),dtype='float32') for l in range(num_layers)]
     # Expand dim to apply broadcasting.
     anchors = np.expand_dims(anchors, 0)
     anchor_maxes = anchors / 2.
     anchor_mins = -anchor_maxes
     valid_mask = boxes_wh[..., 0]>0
-
+    iou_gt_true = np.zeros((m, grid_shapes[0][0], grid_shapes[0][1], 1), dtype='float32')
     for b in range(m):
         # Discard zero rows.
         wh = boxes_wh[b, valid_mask[b]]
@@ -299,7 +298,6 @@ def preprocess_true_boxes(true_boxes, input_shape, anchors): #10.1 delete classf
         box_area = wh[..., 0] * wh[..., 1]
         anchor_area = anchors[..., 0] * anchors[..., 1]
         iou = intersect_area / (box_area + anchor_area - intersect_area)
-
         # Find best anchor for each true box
         best_anchor = np.argmax(iou, axis=-1)
 
@@ -311,9 +309,54 @@ def preprocess_true_boxes(true_boxes, input_shape, anchors): #10.1 delete classf
                     k = anchor_mask[l].index(n)
                     y_true[l][b, j, i, k, 0:4] = true_boxes[b,t, 0:4]
                     y_true[l][b, j, i, k, 4] = 1
+                    iou_gt_true[b, ...] = np.expand_dims(
+                        generate_iou_groundtruth(grid_shapes[l], [j,i],
+                                                                [true_boxes[b,t,3]*float(grid_shapes[l][0]),true_boxes[b,t,2]*float(grid_shapes[l][1])])
+                        ,-1)
 
-    return y_true
+    return y_true,iou_gt_true
 
+def generate_iou_groundtruth(grid_shapes,true_anchor,true_wh):
+    """
+    :param grid_shapes:   widths and heights for generation (w,h)
+    :param true_anchor:  anchor's x and y (x,y)
+    :param true_wh:  anchor's width and height (w,h) use for calculate iou
+    :return: general iou distribution without any hyperparameter for attention loss
+    """
+    def cal_single_iou(box1, box2):
+        smooth = 1e-7
+        xi1 = max(box1[0], box2[0])
+        yi1 = max(box1[1], box2[1])
+        xi2 = min(box1[2], box2[2])
+        yi2 = min(box1[3], box2[3])
+        inter_area = max((yi2 - yi1), 0.) * max((xi2 - xi1), 0.)
+
+        box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        union_area = box1_area + box2_area - inter_area
+
+        iou = (inter_area + smooth) / (union_area + smooth)
+        return iou
+    IMAGE_WIDTH = grid_shapes[0]
+    IMAGE_HEIGHT = grid_shapes[1]
+
+
+    t_w,t_h=true_wh
+    t_x,t_y=true_anchor
+
+    gt_box=[t_x-t_w/2,t_y-t_h/2,t_x+t_w/2,t_y+t_h/2]
+
+    iou_map=np.zeros([IMAGE_WIDTH,IMAGE_HEIGHT])
+    for i in range(IMAGE_WIDTH):
+        for j in range(IMAGE_HEIGHT):
+            iou_map[i,j]=cal_single_iou(gt_box,[max(i-t_w/2,0.),max(j-t_h/2,0.),min(i+t_w/2,IMAGE_WIDTH),min(j+t_h/2,IMAGE_HEIGHT)])
+
+
+   #  plt.figure()
+   #  plt.imshow(iou_map, plt.cm.gray)
+   # # plt.imshow(ground_truth, plt.cm.gray)
+   #  plt.show()
+    return iou_map
 
 def box_iou(b1, b2):
     '''Return iou tensor
@@ -373,8 +416,11 @@ def yolo_loss(args, anchors, ignore_thresh=.5,seg_loss_weight=0.1, print_loss=Fa
 
     '''
     num_layers = len(anchors)//3 # default setting
+    print(args)
     yolo_outputs = args[:1]
-    y_true = args[1:2]
+    att_map=args[1]
+    y_true = args[2:3]
+    gt_map=args[3]
     anchor_mask = [[6,7,8], [3,4,5], [0,1,2]] if num_layers==3 else [[0,1,2]] ##due to deleting 2 scales  change [[6,7,8], [3,4,5], [0,1,2]] to [[0,1,2]]
     input_shape = K.cast(K.shape(yolo_outputs[0])[1:3] * 32, K.dtype(y_true[0]))   # x32 is original size
     grid_shapes = [K.cast(K.shape(yolo_outputs[l])[1:3], K.dtype(y_true[0])) for l in range(num_layers)] #3 degree scales output
@@ -435,11 +481,11 @@ def yolo_loss(args, anchors, ignore_thresh=.5,seg_loss_weight=0.1, print_loss=Fa
         wh_loss = object_mask * box_loss_scale * 0.5 * smooth_L1(raw_true_wh,raw_pred[...,2:4])
         confidence_loss = object_mask * K.binary_crossentropy(object_mask, raw_pred[...,4:5], from_logits=True)+ \
             (1-object_mask) * K.binary_crossentropy(object_mask, raw_pred[...,4:5], from_logits=True) * ignore_mask
-
+        att_loss = K.binary_crossentropy(gt_map, att_map, from_logits=True)
         xy_loss = K.sum(xy_loss) / mf
         wh_loss = K.sum(wh_loss) / mf
         confidence_loss = K.sum(confidence_loss) / mf
-
-        loss += xy_loss+ wh_loss+ confidence_loss
+        att_loss = K.sum(att_loss) / mf * 0.5
+        loss += xy_loss + wh_loss + confidence_loss+att_loss
 
     return  K.expand_dims(loss, axis=0)

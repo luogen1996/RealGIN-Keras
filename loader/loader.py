@@ -58,15 +58,15 @@ class Generator(keras.utils.Sequence):
         image_data = np.array(image_data)
         box_data = np.array(box_data)
         word_data = np.array(word_data)
-        seg_data = np.array(seg_data)
-        det_data = preprocess_true_boxes(box_data, self.input_shape, self.anchors)
-        return image_data, word_data, det_data, seg_data
+        det_data,iou_gt_true = preprocess_true_boxes(box_data, self.input_shape, self.anchors)
+        iou_gt_true = np.array(iou_gt_true)
+        return image_data, word_data, det_data, iou_gt_true
     def __getitem__(self, index):
         """
         Keras sequence method for generating batches.
         """
 
         group = self.groups[index]
-        image_data, word_data, det_data, seg_data=self.get_batch(group)
+        image_data, word_data, det_data, iou_gt_true=self.get_batch(group)
         # print(np.shape(inputs))
-        return [image_data, word_data, *det_data],np.zeros(self.batch_size)
+        return [image_data, word_data, *det_data,iou_gt_true],np.zeros(self.batch_size)

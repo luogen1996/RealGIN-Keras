@@ -69,4 +69,4 @@ def global_attentive_reason_unit(F_v,f_q,k=2):
     # normalization
     F_v_ = LeakyReLU(alpha=0.1)(BatchNormalization()(F_v_))
 
-    return F_v_,F_att
+    return F_v_,E
